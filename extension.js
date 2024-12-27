@@ -18,8 +18,8 @@
  */
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
-import {Extension, InjectionManager, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
-import {AppMenu} from 'resource:///org/gnome/shell/ui/appMenu.js';
+import { Extension, InjectionManager, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
+import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 /*
@@ -45,16 +45,16 @@ export default class EditDesktopFilesExtension extends Extension {
      */
     _createTempFileForEditing(originalPath) {
         const originalFile = Gio.File.new_for_path(originalPath);
-        const tempPath = GLib.build_filenamev([GLib.get_tmp_dir(), 
-            `edf-${GLib.uuid_string_random()}.desktop`]);
+        const tempPath = GLib.build_filenamev([GLib.get_tmp_dir(),
+        `edf-${GLib.uuid_string_random()}.desktop`]);
         const tempFile = Gio.File.new_for_path(tempPath);
 
         try {
             // Copy original file to temp location
-            originalFile.copy(tempFile, 
+            originalFile.copy(tempFile,
                 Gio.FileCopyFlags.OVERWRITE,
                 null, null);
-                
+
             return {
                 tempPath,
                 tempFile,
@@ -63,9 +63,48 @@ export default class EditDesktopFilesExtension extends Extension {
         } catch (error) {
             logError(error, 'Failed to create temporary file');
             Main.notify(_('Edit Desktop Files'),
-                       _('Cannot create temporary file for editing'));
+                _('Cannot create temporary file for editing'));
             return null;
         }
+    }
+
+    /*
+     * Loads default help text from data/help-text.txt
+     * Called only when localized text is not available
+     * 
+     * @returns {string} Default help text in English
+     */
+    _loadDefaultHelpText() {
+        try {
+            const dataDir = this.path + '/data';
+            const helpTextPath = GLib.build_filenamev([dataDir, 'help-text.txt']);
+            const [success, content] = GLib.file_get_contents(helpTextPath);
+
+            if (!success) {
+                logError(new Error('Failed to read help-text.txt'));
+                return '';
+            }
+
+            return new TextDecoder().decode(content);
+        } catch (error) {
+            logError(error, 'Error loading help text');
+            return '';
+        }
+    }
+
+    /*
+     * Gets help text with fallback to default English version
+     * 
+     * @returns {string} Help text in current locale or English
+     */
+    _getHelpText() {
+        let text = _('<help_text>');
+
+        if (text === '<help_text>') {
+            text = this._loadDefaultHelpText();
+        }
+
+        return text;
     }
 
     enable() {
@@ -120,8 +159,8 @@ export default class EditDesktopFilesExtension extends Extension {
                         }
 
                         GLib.spawn_command_line_async(editCommand);
-                        
-                        if(Main.overview.visible) {
+
+                        if (Main.overview.visible) {
                             Main.overview.hide();
                         }
                     })
@@ -132,7 +171,7 @@ export default class EditDesktopFilesExtension extends Extension {
                         let menuItem = menuItems[i]
                         if (menuItem.label) {
                             if (menuItem.label.text == _('App Details')) {
-                                this.moveMenuItem(editMenuItem, i+1)
+                                this.moveMenuItem(editMenuItem, i + 1)
                                 break;
                             }
                         }
@@ -163,7 +202,7 @@ export default class EditDesktopFilesExtension extends Extension {
         for (let menu of this._modifiedMenus) {
             delete menu._editDesktopFilesExtensionMenuItem
         }
-        
+
         // Delete all added MenuItems
         for (let menuItem of this._addedMenuItems) {
             menuItem.destroy();
