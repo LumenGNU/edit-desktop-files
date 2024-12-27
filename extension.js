@@ -28,7 +28,59 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
  */
 class EditingFileManager {
     constructor() {
+        this._extension = extension;  // Need access to extension.path
         this._editingFiles = new Set();
+    }
+
+    /*
+     * Formats text as EDF comments by adding #EDF# prefix to each line
+     * 
+     * @param {string} text - Raw help text
+     * @returns {string} Text formatted as EDF comments
+     */
+    _formatAsEdfComments(text) {
+        return text.split('\n')
+            .map(line => line.trim() ? '#EDF# ' + line : '#EDF#')
+            .join('\n') + '\n\n';
+    }
+
+    /*
+     * Loads default help text from data/fallback-help-text.txt
+     * Called only when localized text is not available
+     * 
+     * @returns {string} Default help text in English
+     */
+    _loadDefaultHelpText() {
+        try {
+            const dataDir = this._extension.path + '/data';
+            const helpTextPath = GLib.build_filenamev([dataDir, 'fallback-help-text.txt']);
+            const [success, content] = GLib.file_get_contents(helpTextPath);
+            
+            if (!success) {
+                logError(new Error('Failed to read fallback-help-text.txt'));
+                return '';
+            }
+            
+            return new TextDecoder().decode(content);
+        } catch (error) {
+            logError(error, 'Error loading help text');
+            return '';
+        }
+    }
+
+    /*
+     * Gets help text with fallback to default English version
+     * 
+     * @returns {string} Help text in current locale or English
+     */
+    _getHelpText() {
+        let text = _('<help_text>');
+        
+        if (text === '<help_text>') {
+            text = this._loadDefaultHelpText();
+        }
+        
+        return text;
     }
 
     /*
@@ -39,7 +91,50 @@ class EditingFileManager {
      * @returns {Object} Created file info or null on error
      */
     createForEditing(originalPath) {
-        // Implementation
+        const originalFile = Gio.File.new_for_path(originalPath);
+        const tempPath = GLib.build_filenamev([GLib.get_tmp_dir(), 
+            `edf-${GLib.uuid_string_random()}.desktop`]);
+        const tempFile = Gio.File.new_for_path(tempPath);
+
+        try {
+            // Write help text first
+            const helpText = this._getHelpText();
+            if (helpText) {
+                const formattedHelp = this._formatAsEdfComments(helpText);
+                tempFile.replace_contents(
+                    new TextEncoder().encode(formattedHelp),
+                    null,
+                    false,
+                    Gio.FileCreateFlags.NONE,
+                    null
+                );
+                
+                // Append original content
+                const [success, contents] = originalFile.load_contents(null);
+                if (success) {
+                    const stream = tempFile.append_to(
+                        Gio.FileCreateFlags.NONE,
+                        null
+                    );
+                    stream.write(contents, null);
+                    stream.close(null);
+                }
+                // @todo: else { fail }
+            }
+                
+            this._editingFiles.add(tempFile);
+
+            return {
+                tempPath,
+                tempFile,
+                originalFile
+            };
+        } catch (error) {
+            logError(error, 'Failed to create temporary file');
+            Main.notify(_('Edit Desktop Files'),
+                       _('Cannot create temporary file for editing'));
+            return null;
+        }
     }
 
     /*
@@ -70,119 +165,6 @@ class EditingFileManager {
 */
 export default class EditDesktopFilesExtension extends Extension {
 
-    /*
-     * Formats text as EDF comments by adding #EDF# prefix to each line
-     * 
-     * @param {string} text - Raw help text
-     * @returns {string} Text formatted as EDF comments
-     */
-    _formatAsEdfComments(text) {
-        return text.split('\n')
-            .map(line => line.trim() ? '#EDF# ' + line : '#EDF#')
-            .join('\n') + '\n\n';
-    }
-
-    /*
-     * Creates a temporary file for safe editing of the desktop entry.
-     * Copies the original file content and adds help comments.
-     * 
-     * @param {string} originalPath - Path to the original .desktop file
-     * @returns {Object} Object containing paths and file objects
-     *         {string} .tempPath - Path to temporary file
-     *         {Gio.File} .tempFile - Temporary file object
-     *         {Gio.File} .originalFile - Original file object
-     */
-    _createTempFileForEditing(originalPath) {
-        const originalFile = Gio.File.new_for_path(originalPath);
-        const tempPath = GLib.build_filenamev([GLib.get_tmp_dir(),
-        `edf-${GLib.uuid_string_random()}.desktop`]);
-        const tempFile = Gio.File.new_for_path(tempPath);
-
-        try {
-            // Copy original file to temp location
-            originalFile.copy(tempFile,
-                Gio.FileCopyFlags.OVERWRITE,
-                null, null);
-
-            // Add help text as comments
-            const helpText = this._getHelpText();
-            if (helpText) {
-                const formattedHelp = this._formatAsEdfComments(helpText);
-
-                // Write help text first
-                tempFile.replace_contents(
-                    new TextEncoder().encode(formattedHelp),
-                    null,
-                    false,
-                    Gio.FileCreateFlags.NONE,
-                    null
-                );
-
-                // Append original content
-                const [success, contents] = originalFile.load_contents(null);
-                if (success) {
-                    const stream = tempFile.append_to(
-                        Gio.FileCreateFlags.NONE,
-                        null
-                    );
-                    stream.write(contents, null);
-                    stream.close(null);
-                }
-                // @todo: else { fail }
-            }
-
-            return {
-                tempPath,
-                tempFile,
-                originalFile
-            };
-        } catch (error) {
-            logError(error, 'Failed to create temporary file');
-            Main.notify(_('Edit Desktop Files'),
-                _('Cannot create temporary file for editing'));
-            return null;
-        }
-    }
-
-    /*
-     * Loads default help text from data/help-text.txt
-     * Called only when localized text is not available
-     * 
-     * @returns {string} Default help text in English
-     */
-    _loadDefaultHelpText() {
-        try {
-            const dataDir = this.path + '/data';
-            const helpTextPath = GLib.build_filenamev([dataDir, 'fallback-help-text.txt']);
-            const [success, content] = GLib.file_get_contents(helpTextPath);
-
-            if (!success) {
-                logError(new Error('Failed to read help-text.txt'));
-                return '';
-            }
-
-            return new TextDecoder().decode(content);
-        } catch (error) {
-            logError(error, 'Error loading help text');
-            return '';
-        }
-    }
-
-    /*
-     * Gets help text with fallback to default English version
-     * 
-     * @returns {string} Help text in current locale or English
-     */
-    _getHelpText() {
-        let text = _('<help_text>');
-
-        if (text === '<help_text>') {
-            text = this._loadDefaultHelpText();
-        }
-
-        return text;
-    }
-
     enable() {
         this._settings = this.getSettings();
         this._injectionManager = new InjectionManager();
@@ -195,7 +177,7 @@ export default class EditDesktopFilesExtension extends Extension {
         // Extend the AppMenu's 'open' method to add an 'Edit' MenuItem
         // See: https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/main/js/ui/appMenu.js
         this._injectionManager.overrideMethod(AppMenu.prototype, 'open',
-            originalMethod => {
+            originalMethod => { // @fixme: Не корректно, переработать
                 const metadata = this.metadata;
                 const settings = this.getSettings();
                 const modifiedMenus = this._modifiedMenus;
