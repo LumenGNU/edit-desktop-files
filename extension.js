@@ -23,6 +23,43 @@ import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 /*
+ * Manages intermediate files for safe desktop entry editing.
+ * Handles file lifecycle: creation, validation, application of changes.
+ */
+class EditingFileManager {
+    constructor() {
+        this._editingFiles = new Set();
+    }
+
+    /*
+     * Creates intermediate file for editing desktop entry.
+     * Adds help comments and preserves original content.
+     * 
+     * @param {string} originalPath - Path to original .desktop file
+     * @returns {Object} Created file info or null on error
+     */
+    createForEditing(originalPath) {
+        // Implementation
+    }
+
+    /*
+     * Removes specific editing file and its associated resources
+     * 
+     * @param {Gio.File} file - File to remove
+     */
+    remove(file) {
+        // Implementation
+    }
+
+    /*
+     * Removes all editing files and cleans up resources
+     */
+    cleanup() {
+        // Implementation
+    }
+}
+
+/*
 * The Edit Desktop Files extension provides users with an "Edit" button on the pop-up menu
 * that appears when right-clicking an app icon in the app grid or dash.
 * When clicked, the backing desktop file is opened in an editor.
