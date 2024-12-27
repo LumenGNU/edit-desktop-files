@@ -1,0 +1,15 @@
+Edit Desktop Files Extension
+-------------------------
+This is a temporary copy for editing. 
+After saving and closing editor, file will be validated and
+copied to ~/.local/share/applications/
+
+Comments starting with #EDF# will not be copied to the resulting file.
+
+If you clear this file (leave it empty or with comments only):
+- If system-wide .desktop file exists: it will be used instead
+- If no system-wide file: the application will be removed from menu
+In both cases the local file will be moved to Trash.
+
+NEED HELP? Desktop Entry Specification:
+https://freedesktop.org/wiki/Specifications/desktop-entry-spec/

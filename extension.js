@@ -34,6 +34,18 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 export default class EditDesktopFilesExtension extends Extension {
 
     /*
+     * Formats text as EDF comments by adding #EDF# prefix to each line
+     * 
+     * @param {string} text - Raw help text
+     * @returns {string} Text formatted as EDF comments
+     */
+    _formatAsEdfComments(text) {
+        return text.split('\n')
+            .map(line => line.trim() ? '#EDF# ' + line : '#EDF#')
+            .join('\n') + '\n\n';
+    }
+
+    /*
      * Creates a temporary file for safe editing of the desktop entry.
      * Copies the original file content and adds help comments.
      * 
@@ -54,6 +66,33 @@ export default class EditDesktopFilesExtension extends Extension {
             originalFile.copy(tempFile,
                 Gio.FileCopyFlags.OVERWRITE,
                 null, null);
+
+            // Add help text as comments
+            const helpText = this._getHelpText();
+            if (helpText) {
+                const formattedHelp = this._formatAsEdfComments(helpText);
+
+                // Write help text first
+                tempFile.replace_contents(
+                    new TextEncoder().encode(formattedHelp),
+                    null,
+                    false,
+                    Gio.FileCreateFlags.NONE,
+                    null
+                );
+
+                // Append original content
+                const [success, contents] = originalFile.load_contents(null);
+                if (success) {
+                    const stream = tempFile.append_to(
+                        Gio.FileCreateFlags.NONE,
+                        null
+                    );
+                    stream.write(contents, null);
+                    stream.close(null);
+                }
+                // @todo: else { fail }
+            }
 
             return {
                 tempPath,
@@ -77,7 +116,7 @@ export default class EditDesktopFilesExtension extends Extension {
     _loadDefaultHelpText() {
         try {
             const dataDir = this.path + '/data';
-            const helpTextPath = GLib.build_filenamev([dataDir, 'help-text.txt']);
+            const helpTextPath = GLib.build_filenamev([dataDir, 'fallback-help-text.txt']);
             const [success, content] = GLib.file_get_contents(helpTextPath);
 
             if (!success) {
