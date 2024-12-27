@@ -38,10 +38,22 @@ class EditingFileManager {
      * @param {string} text - Raw help text
      * @returns {string} Text formatted as EDF comments
      */
-    _formatAsEdfComments(text) {
+    _formatAsEdfComments(text, prefix = "") {
         return text.split('\n')
-            .map(line => line.trim() ? '#EDF# ' + line : '#EDF#')
+            .map(line => line.trim() ? `#EDF#${prefix} ` + line : '#EDF#')
             .join('\n') + '\n\n';
+    }
+
+    /*
+     * Filters out EDF comments from text
+     * 
+     * @param {string} text - Text to filter
+     * @returns {string} Text without EDF comments
+     */
+    _filterEdfComments(text) {
+        return text.split('\n')
+            .filter(line => !line.startsWith('#EDF#'))
+            .join('\n');
     }
 
     /*
@@ -55,12 +67,12 @@ class EditingFileManager {
             const dataDir = this._extension.path + '/data';
             const helpTextPath = GLib.build_filenamev([dataDir, 'fallback-help-text.txt']);
             const [success, content] = GLib.file_get_contents(helpTextPath);
-            
+
             if (!success) {
                 logError(new Error('Failed to read fallback-help-text.txt'));
                 return '';
             }
-            
+
             return new TextDecoder().decode(content);
         } catch (error) {
             logError(error, 'Error loading help text');
@@ -75,11 +87,11 @@ class EditingFileManager {
      */
     _getHelpText() {
         let text = _('<help_text>');
-        
+
         if (text === '<help_text>') {
             text = this._loadDefaultHelpText();
         }
-        
+
         return text;
     }
 
@@ -92,8 +104,8 @@ class EditingFileManager {
      */
     createForEditing(originalPath) {
         const originalFile = Gio.File.new_for_path(originalPath);
-        const tempPath = GLib.build_filenamev([GLib.get_tmp_dir(), 
-            `edf-${GLib.uuid_string_random()}.desktop`]);
+        const tempPath = GLib.build_filenamev([GLib.get_tmp_dir(),
+        `edf-${GLib.uuid_string_random()}.desktop`]);
         const tempFile = Gio.File.new_for_path(tempPath);
 
         try {
@@ -108,7 +120,7 @@ class EditingFileManager {
                     Gio.FileCreateFlags.NONE,
                     null
                 );
-                
+
                 // Append original content
                 const [success, contents] = originalFile.load_contents(null);
                 if (success) {
@@ -121,7 +133,7 @@ class EditingFileManager {
                 }
                 // @todo: else { fail }
             }
-                
+
             this._editingFiles.add(tempFile);
 
             return {
@@ -132,8 +144,233 @@ class EditingFileManager {
         } catch (error) {
             logError(error, 'Failed to create temporary file');
             Main.notify(_('Edit Desktop Files'),
-                       _('Cannot create temporary file for editing'));
+                _('Cannot create temporary file for editing'));
             return null;
+        }
+    }
+
+    /*
+     * Validates file using GLib.KeyFile
+     * Provides basic structure validation and syntax checking
+     * 
+     * @param {Gio.File} file - File to validate
+     * @returns {Object} Validation result and errors if any
+     */
+    _validateWithKeyFile(file) {
+        const keyFile = new GLib.KeyFile();
+
+        try {
+            const [success, contents] = file.load_contents(null);
+            if (!success) {
+                return {
+                    isValid: false,
+                    errors: ['Failed to read file contents']
+                };
+            }
+
+            keyFile.load_from_bytes(new GLib.Bytes(contents),
+                GLib.KeyFileFlags.KEEP_COMMENTS | GLib.KeyFileFlags.KEEP_TRANSLATIONS);
+
+            return {
+                isValid: true,
+                errors: []
+            };
+
+        } catch (error) {
+            // GLib.KeyFile provides localized error messages
+            return {
+                isValid: false,
+                errors: [error.message]
+            };
+        }
+    }
+
+    /*
+     * Validates file using Gio.DesktopAppInfo
+     * Primary validation for desktop entry specification compliance
+     * 
+     * @param {Gio.File} file - File to validate
+     * @returns {Object} Validation result
+     */
+    _validateWithDesktopAppInfo(file) {
+        try {
+            const appInfo = Gio.DesktopAppInfo.new_from_filename(file.get_path());
+
+            // If appInfo is null - desktop entry is not valid
+            if (!appInfo) {
+                return {
+                    isValid: false,
+                    needDetails: true  // Signal that we need desktop-file-validate
+                };
+            }
+
+            return {
+                isValid: true,
+                needDetails: false
+            };
+
+        } catch (error) {
+            return {
+                isValid: false,
+                needDetails: true,
+                errors: [error.message]
+            };
+        }
+    }
+
+    /*
+     * Validates file using desktop-file-validate utility
+     * Used for detailed error reporting when DesktopAppInfo validation fails
+     * 
+     * @param {Gio.File} file - File to validate
+     * @returns {Object} Validation result with detailed error messages
+     */
+    _validateWithDesktopFileValidate(file) {
+        try {
+            // Prepare command
+            const filePath = file.get_path();
+            const [success, stdout, stderr, exitCode] = GLib.spawn_command_line_sync(
+                `desktop-file-validate "${filePath}"`
+            );
+
+            if (!success) {
+                return {
+                    isValid: false,
+                    errors: ['Failed to run desktop-file-validate']
+                };
+            }
+
+            // desktop-file-validate returns:
+            // - exit code 0 if file is valid
+            // - exit code 1 if validation errors were found
+            // - error messages in stderr
+            const errors = new TextDecoder().decode(stderr)
+                .split('\n')
+                .filter(line => line.trim().length > 0);
+
+            return {
+                isValid: exitCode === 0,
+                errors: errors
+            };
+
+        } catch (error) {
+            return {
+                isValid: false,
+                errors: ['desktop-file-validate is not available']
+            };
+        }
+    }
+
+    /*
+     * Recreates editing file with error messages as EDF comments
+     * Preserves original content and adds validation errors
+     * 
+     * @param {Gio.File} file - File to recreate
+     * @param {string[]} errors - Error messages to add
+     * @returns {boolean} Success status
+     */
+    _recreateFileWithErrors(file, errors) {
+        try {
+            // Get current content - it contains user changes!
+            const [success, contents] = file.load_contents(null);
+            if (!success) {
+                return false;
+            }
+
+            // Get user content without EDF comments
+            const userContent = this._filterEdfComments(
+                new TextDecoder().decode(contents)
+            );
+
+            // Write help text first
+            const helpText = this._formatAsEdfComments(this._getHelpText());
+            file.replace_contents(
+                new TextEncoder().encode(helpText),
+                null,
+                false,
+                Gio.FileCreateFlags.NONE,
+                null
+            );
+
+            // Append error messages
+            const errorText = this._formatAsEdfComments(errors.join('\n'), ' ERROR:');
+            const stream = file.append_to(
+                Gio.FileCreateFlags.NONE,
+                null
+            );
+            stream.write(new TextEncoder().encode(errorText), null);
+
+            // Append user's content
+            stream.write(new TextEncoder().encode(userContent), null);
+            stream.close(null);
+
+            return true;
+        } catch (error) {
+            logError(error, 'Failed to recreate file with error messages');
+            return false;
+        }
+    }
+
+    /*
+     * Validates edited desktop entry file
+     * Uses multiple validation steps:
+     * 1. Basic structure check with GLib.KeyFile
+     * 2. Desktop entry validation with Gio.DesktopAppInfo
+     * 3. Detailed error reporting with desktop-file-validate if needed
+     * 
+     * @param {Gio.File} file - File to validate
+     * @returns {boolean} Validation success status
+     */
+    validateFile(file) {
+        // First check with GLib.KeyFile
+        const keyFileResult = this._validateWithKeyFile(file);
+        if (!keyFileResult.isValid) {
+            // Recreation with KeyFile errors
+            this._recreateFileWithErrors(file, keyFileResult.errors);
+            return false;
+        }
+
+        // Then check with DesktopAppInfo
+        const desktopResult = this._validateWithDesktopAppInfo(file);
+        if (!desktopResult.isValid) {
+            if (desktopResult.needDetails) {
+                // Get detailed errors with desktop-file-validate
+                const validateResult = this._validateWithDesktopFileValidate(file);
+                this._recreateFileWithErrors(file, validateResult.errors);
+            } else if (desktopResult.errors) {
+                this._recreateFileWithErrors(file, desktopResult.errors);
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    /*
+     * Checks if file contains only comments or is empty
+     * Used to detect if user wants to remove desktop entry
+     * 
+     * @param {Gio.File} file - File to check
+     * @returns {boolean} True if file contains only comments or is empty
+     */
+    isEmptyContent(file) {
+        try {
+            const [success, contents] = file.load_contents(null);
+            if (!success) {
+                return false;
+            }
+
+            // Get content without EDF comments
+            const content = this._filterEdfComments(
+                new TextDecoder().decode(contents)
+            );
+
+            // Check if remaining content contains only whitespace or is empty
+            return content.trim().length === 0;
+
+        } catch (error) {
+            logError(error, 'Failed to check if file is empty');
+            return false;
         }
     }
 
