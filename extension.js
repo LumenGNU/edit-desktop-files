@@ -18,7 +18,7 @@
  */
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
-import {Extension, InjectionManager, gettext} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {Extension, InjectionManager, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {AppMenu} from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -62,6 +62,8 @@ export default class EditDesktopFilesExtension extends Extension {
             };
         } catch (error) {
             logError(error, 'Failed to create temporary file');
+            Main.notify(_('Edit Desktop Files'),
+                       _('Cannot create temporary file for editing'));
             return null;
         }
     }
@@ -99,8 +101,14 @@ export default class EditDesktopFilesExtension extends Extension {
 
                     // Add the 'Edit' MenuItem
                     let editMenuItem = this.addAction(localizedEditStr, () => {
+                        // prepare temp-file
+                        const fileInfo = this._createTempFileForEditing(appInfo.filename);
+                        if (!fileInfo) {
+                            return; // Do nothing if temp file creation failed
+                        }
                         // Open the GNOME Text Editor by default, otherwise use the command provided by the user
-                        let editCommand = `gapplication launch org.gnome.TextEditor '${appInfo.filename}'`
+                        let editCommand = `gapplication launch org.gnome.TextEditor '${fileInfo.tempPath}'`;
+
                         if (settings.get_boolean("use-custom-edit-command")) {
                             let customEditCommand = settings.get_string("custom-edit-command")
                             // If the user forgot to include %U in the command, fallback to the default with a warning
