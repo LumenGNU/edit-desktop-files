@@ -17,6 +17,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import {Extension, InjectionManager, gettext} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {AppMenu} from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -31,6 +32,39 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 * file with the GNOME Text Editor (default) or a custom command supplied by the user.
 */
 export default class EditDesktopFilesExtension extends Extension {
+
+    /*
+     * Creates a temporary file for safe editing of the desktop entry.
+     * Copies the original file content and adds help comments.
+     * 
+     * @param {string} originalPath - Path to the original .desktop file
+     * @returns {Object} Object containing paths and file objects
+     *         {string} .tempPath - Path to temporary file
+     *         {Gio.File} .tempFile - Temporary file object
+     *         {Gio.File} .originalFile - Original file object
+     */
+    _createTempFileForEditing(originalPath) {
+        const originalFile = Gio.File.new_for_path(originalPath);
+        const tempPath = GLib.build_filenamev([GLib.get_tmp_dir(), 
+            `edf-${GLib.uuid_string_random()}.desktop`]);
+        const tempFile = Gio.File.new_for_path(tempPath);
+
+        try {
+            // Copy original file to temp location
+            originalFile.copy(tempFile, 
+                Gio.FileCopyFlags.OVERWRITE,
+                null, null);
+                
+            return {
+                tempPath,
+                tempFile,
+                originalFile
+            };
+        } catch (error) {
+            logError(error, 'Failed to create temporary file');
+            return null;
+        }
+    }
 
     enable() {
         this._settings = this.getSettings();
