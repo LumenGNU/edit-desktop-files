@@ -138,19 +138,33 @@ class EditingFileManager {
     }
 
     /*
-     * Removes specific editing file and its associated resources
+     * Removes specific editing file
      * 
      * @param {Gio.File} file - File to remove
      */
     remove(file) {
-        // Implementation
+        if (file && this._editingFiles.has(file)) {
+            try {
+                file.delete(null);
+                this._editingFiles.delete(file);
+            } catch (error) {
+                logError(error, 'Failed to delete editing file');
+            }
+        }
     }
 
     /*
      * Removes all editing files and cleans up resources
      */
     cleanup() {
-        // Implementation
+        for (const file of this._editingFiles) {
+            try {
+                file.delete(null);
+            } catch (error) {
+                logError(error, 'Failed to delete editing file during cleanup');
+            }
+        }
+        this._editingFiles.clear();
     }
 }
 
