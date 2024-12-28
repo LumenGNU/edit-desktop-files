@@ -526,78 +526,89 @@ export default class EditDesktopFilesExtension extends Extension {
      */
     async _launchEditor(fileInfo) {
         try {
-            let command = ['gapplication', 'launch', 'org.gnome.TextEditor', fileInfo.tempPath];
+            while (true) {
+                const command = ['gapplication', 'launch', 'org.gnome.TextEditor', fileInfo.tempPath];
 
-            // Use custom command if configured
-            if (this._settings.get_boolean("use-custom-edit-command")) {
-                const customCommand = this._settings.get_string("custom-edit-command");
-                if (customCommand.indexOf('%U') !== -1) {
-                    command = customCommand.replace('%U', fileInfo.tempPath).split(' ');
-                } else {
-                    console.warn(`${this.metadata.name}: Custom edit command is missing '%U', falling back to default GNOME Text Editor`);
+                // Use custom command if configured
+                if (this._settings.get_boolean("use-custom-edit-command")) {
+                    const customCommand = this._settings.get_string("custom-edit-command");
+                    if (customCommand.indexOf('%U') !== -1) {
+                        command = customCommand.replace('%U', fileInfo.tempPath).split(' ');
+                    } else {
+                        console.warn(`${this.metadata.name}: Custom edit command is missing '%U', falling back to default GNOME Text Editor`);
+                    }
                 }
-            }
 
-            const proc = Gio.Subprocess.new(
-                command,
-                Gio.SubprocessFlags.STDOUT_SILENCE |     // Don't pollute shell output
-                Gio.SubprocessFlags.STDERR_SILENCE |     // with editor messages
-                Gio.SubprocessFlags.SEARCH_PATH_FROM_ENVP // Use launcher environment PATH
-            );
-
-            // Wait for editor to close
-            await proc.wait_check_async(null);
-
-            // Editor closed - validate edited file
-            if (!this._editingFileManager.validateFile(fileInfo.tempFile)) {
-                // TODO: Show dialog asking if user wants to fix errors
-                // TODO: If yes - reopen editor, if no - discard changes
-                return;
-            }
-
-            // Editor closed - validate edited file
-            if (!this._editingFileManager.validateFile(fileInfo.tempFile)) {
-                // TODO: Show dialog asking if user wants to fix errors
-                // TODO: If yes - reopen editor, if no - discard changes
-                return;
-            }
-
-            // Check if file is empty (contains only comments)
-            if (this._editingFileManager.isEmptyContent(fileInfo.tempFile)) {
-                const confirmed = await this._showConfirmDialog(
-                    _("Remove Desktop Entry"),
-                    _("This entry appears to be empty. Do you want to remove it?"),
-                    _("Remove"),
-                    _("Cancel")
+                const proc = Gio.Subprocess.new(
+                    command,
+                    Gio.SubprocessFlags.STDOUT_SILENCE |     // Don't pollute shell output
+                    Gio.SubprocessFlags.STDERR_SILENCE |     // with editor messages
+                    Gio.SubprocessFlags.SEARCH_PATH_FROM_ENVP // Use launcher environment PATH
                 );
 
-                if (confirmed) {
-                    // Get path to local desktop entry
-                    const localPath = GLib.build_filenamev([
-                        GLib.get_home_dir(),
-                        '.local/share/applications',
-                        fileInfo.originalFile.get_basename()
-                    ]);
-                    const localFile = Gio.File.new_for_path(localPath);
+                // Wait for editor to close
+                await proc.wait_check_async(null);
 
-                    try {
-                        // Move to trash if exists
-                        if (localFile.query_exists(null)) {
-                            localFile.trash(null);
+                // First check if file is empty
+                // Check if file is empty (contains only comments)
+                if (this._editingFileManager.isEmptyContent(fileInfo.tempFile)) {
+                    const confirmed = await this._showConfirmDialog(
+                        _("Remove Desktop Entry"),
+                        _("This entry appears to be empty. Do you want to remove it?"),
+                        _("Remove"),
+                        _("Cancel")
+                    );
+
+                    if (confirmed) {
+                        // Get path to local desktop entry
+                        const localPath = GLib.build_filenamev([
+                            GLib.get_home_dir(),
+                            '.local/share/applications',
+                            fileInfo.originalFile.get_basename()
+                        ]);
+                        const localFile = Gio.File.new_for_path(localPath);
+
+                        try {
+                            // Move to trash if exists
+                            if (localFile.query_exists(null)) {
+                                localFile.trash(null);
+                            }
+
+                            // Cleanup editing file
+                            this._editingFileManager.remove(fileInfo.tempFile);
+
+                        } catch (error) {
+                            logError(error, 'Failed to move file to trash');
                         }
-
-                        // Cleanup editing file
+                    } else {
+                        // User canceled - just remove editing file
                         this._editingFileManager.remove(fileInfo.tempFile);
-
-                    } catch (error) {
-                        logError(error, 'Failed to move file to trash');
                     }
-                } else {
-                    // User canceled - just remove editing file
-                    this._editingFileManager.remove(fileInfo.tempFile);
+                    return;
                 }
-                return;
+
+                // Editor closed - validate edited file
+                if (this._editingFileManager.validateFile(fileInfo.tempFile)) {
+                    break;  // File is valid, exit loop
+                }
+
+                // File is not valid - ask user what to do
+                const continueEditing = await this._showConfirmDialog(
+                    _("Validation Error"),
+                    _("The desktop entry contains errors. Do you want to continue editing?"),
+                    _("Continue Editing"),
+                    _("Discard Changes")
+                );
+
+                if (!continueEditing) {
+                    this._editingFileManager.remove(fileInfo.tempFile);
+                    return;
+                }
+                // Loop continues - reopen editor
+
             }
+
+             // TODO: If file is valid - apply changes
 
         } catch (error) {
             logError(error, 'Failed to handle editor process');
