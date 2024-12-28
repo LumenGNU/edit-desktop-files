@@ -27,9 +27,43 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
  * Handles file lifecycle: creation, validation, application of changes.
  */
 class EditingFileManager {
+    // FIXME: Add more robust file operations with better error handling
+    // FIXME: Ensure all file streams are properly closed
+    // TODO: Add limit for simultaneously edited files
+    // TODO: Add fallback behavior when desktop-file-validate is not available
+    // TODO: Improve desktop-file-validate output parsing for better error reporting
+    // TODO: Consider adding tracking of multiple editing sessions for the same desktop file
     constructor() {
         this._extension = extension;  // Need access to extension.path
         this._editingFiles = new Set();
+        this._originalFiles = new Map();  // temp file -> original file
+    }
+
+    /*
+     * Formats error messages as EDF comments
+     * 
+     * @param {string[]} errors - Array of error messages
+     * @returns {string} Formatted error messages with EDF comments
+     */
+    _formatErrorComments(errors) {
+        return this._formatAsEdfComments(errors.join('\n'), 'ERROR:');
+    }
+
+    /*
+     * Formats help text as EDF comments and adds original file name
+     * Inserts file name as second line after header
+     * 
+     * @param {string} text - Raw help text
+     * @param {string} file_name - Path to original .desktop file
+     * @returns {string} Formatted help text with EDF comments
+     */
+    _formatHelpComments(text, file_name) {
+        // Формируем helpText
+        // Вставляем имя файла второй строкой
+        const lines = this._formatAsEdfComments(text).split('\n');
+        lines.splice(1, 0, `#EDF# @File: ${file_name}`);
+        
+        return lines.join('\n');
     }
 
     /*
@@ -108,11 +142,14 @@ class EditingFileManager {
         `edf-${GLib.uuid_string_random()}.desktop`]);
         const tempFile = Gio.File.new_for_path(tempPath);
 
+        this._editingFiles.add(tempFile);
+        this._originalFiles.set(tempFile, originalFile);
+
         try {
             // Write help text first
             const helpText = this._getHelpText();
             if (helpText) {
-                const formattedHelp = this._formatAsEdfComments(helpText);
+                const formattedHelp = this._formatHelpComments(helpText, originalFile.get_basename());
                 tempFile.replace_contents(
                     new TextEncoder().encode(formattedHelp),
                     null,
@@ -283,7 +320,9 @@ class EditingFileManager {
             );
 
             // Write help text first
-            const helpText = this._formatAsEdfComments(this._getHelpText());
+            const helpText = this._formatHelpComments(this._getHelpText(), 
+                                                      this._originalFiles.get(file).get_basename());
+            
             file.replace_contents(
                 new TextEncoder().encode(helpText),
                 null,
@@ -293,7 +332,7 @@ class EditingFileManager {
             );
 
             // Append error messages
-            const errorText = this._formatAsEdfComments(errors.join('\n'), ' ERROR:');
+            const errorText = this._formatErrorComments(errors);
             const stream = file.append_to(
                 Gio.FileCreateFlags.NONE,
                 null
@@ -381,6 +420,8 @@ class EditingFileManager {
      */
     remove(file) {
         if (file && this._editingFiles.has(file)) {
+            this._editingFiles.delete(file);
+            this._originalFiles.delete(file);
             try {
                 file.delete(null);
                 this._editingFiles.delete(file);
@@ -402,6 +443,7 @@ class EditingFileManager {
             }
         }
         this._editingFiles.clear();
+        this._originalFiles.clear();
     }
 }
 
