@@ -22,6 +22,10 @@ import { Extension, InjectionManager, gettext as _ } from 'resource:///org/gnome
 import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
+import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
+import * as St from 'gi://St';
+import Clutter from 'gi://Clutter';
+
 // @fixme: переименовать временный -> промежуточный
 /*
  * Manages intermediate files for safe desktop entry editing.
@@ -459,6 +463,57 @@ class EditingFileManager {
 */
 export default class EditDesktopFilesExtension extends Extension {
 
+    /**
+     * Shows modal dialog to confirm action
+     * Uses standard GNOME Shell modal dialog
+     * 
+     * @param {string} title - Dialog title
+     * @param {string} message - Dialog message 
+     * @param {string} confirmLabel - Label for confirm button
+     * @param {string} cancelLabel - Label for cancel button
+     * @returns {Promise<boolean>} True if confirmed, False if canceled
+     */
+    async _showConfirmDialog(title, message, confirmLabel, cancelLabel) {
+        try {
+            const dialog = new ModalDialog.ModalDialog({
+                destroyOnClose: true
+            });
+
+            dialog.contentLayout.add(new St.Label({
+                text: message,
+                style_class: 'header'
+            }));
+
+            dialog.addButton({
+                label: cancelLabel,
+                action: () => {
+                    dialog.close();
+                    dialog._deferred.resolve(false);
+                },
+                key: Clutter.KEY_Escape
+            });
+
+            dialog.addButton({
+                label: confirmLabel,
+                action: () => {
+                    dialog.close();
+                    dialog._deferred.resolve(true);
+                }
+            });
+
+            dialog._deferred = new Promise((resolve) => {
+                dialog._deferred = { resolve };
+            });
+
+            dialog.open();
+            return dialog._deferred;
+
+        } catch (error) {
+            logError(error, 'Failed to show confirmation dialog');
+            return false;
+        }
+    }
+
     /*
      * Launches editor for desktop entry and waits for completion
      * Uses Gio.Subprocess instead of GLib.spawn_command_line_async because:
@@ -485,14 +540,43 @@ export default class EditDesktopFilesExtension extends Extension {
 
             const proc = Gio.Subprocess.new(
                 command,
-                Gio.SubprocessFlags.NONE
+                Gio.SubprocessFlags.STDOUT_SILENCE |     // Don't pollute shell output
+                Gio.SubprocessFlags.STDERR_SILENCE |     // with editor messages
+                Gio.SubprocessFlags.SEARCH_PATH_FROM_ENVP // Use launcher environment PATH
             );
 
             // Wait for editor to close
             await proc.wait_check_async(null);
 
-            // Editor closed - validate file
-            // TODO: Add validation here
+            // Editor closed - validate edited file
+            if (!this._editingFileManager.validateFile(fileInfo.tempFile)) {
+                // TODO: Show dialog asking if user wants to fix errors
+                // TODO: If yes - reopen editor, if no - discard changes
+                return;
+            }
+
+            // Editor closed - validate edited file
+            if (!this._editingFileManager.validateFile(fileInfo.tempFile)) {
+                // TODO: Show dialog asking if user wants to fix errors
+                // TODO: If yes - reopen editor, if no - discard changes
+                return;
+            }
+
+            // Check if file is empty (contains only comments)
+            if (this._editingFileManager.isEmptyContent(fileInfo.tempFile)) {
+                const confirmed = await this._showConfirmDialog(
+                    _("Remove Desktop Entry"),
+                    _("This entry appears to be empty. Do you want to remove it?"),
+                    _("Remove"),
+                    _("Cancel")
+                );
+
+                if (confirmed) {
+                    // TODO: Move file to trash
+                }
+                // @todo: else ...
+                return;
+            }
 
         } catch (error) {
             logError(error, 'Failed to handle editor process');
