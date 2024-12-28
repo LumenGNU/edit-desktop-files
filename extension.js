@@ -459,6 +459,46 @@ class EditingFileManager {
 */
 export default class EditDesktopFilesExtension extends Extension {
 
+    /*
+     * Launches editor for desktop entry and waits for completion
+     * Uses Gio.Subprocess instead of GLib.spawn_command_line_async because:
+     * - It's safer and cleaner way to handle subprocesses
+     * - Provides proper process completion tracking
+     * - Handles cleanup automatically
+     * - Better error handling
+     * 
+     * @param {Object} fileInfo - Information about file to edit
+     */
+    async _launchEditor(fileInfo) {
+        try {
+            let command = ['gapplication', 'launch', 'org.gnome.TextEditor', fileInfo.tempPath];
+
+            // Use custom command if configured
+            if (this._settings.get_boolean("use-custom-edit-command")) {
+                const customCommand = this._settings.get_string("custom-edit-command");
+                if (customCommand.indexOf('%U') !== -1) {
+                    command = customCommand.replace('%U', fileInfo.tempPath).split(' ');
+                } else {
+                    console.warn(`${this.metadata.name}: Custom edit command is missing '%U', falling back to default GNOME Text Editor`);
+                }
+            }
+
+            const proc = Gio.Subprocess.new(
+                command,
+                Gio.SubprocessFlags.NONE
+            );
+
+            // Wait for editor to close
+            await proc.wait_check_async(null);
+
+            // Editor closed - validate file
+            // TODO: Add validation here
+
+        } catch (error) {
+            logError(error, 'Failed to handle editor process');
+        }
+    }
+
     enable() {
         this._settings = this.getSettings();
         this._injectionManager = new InjectionManager();
@@ -471,7 +511,7 @@ export default class EditDesktopFilesExtension extends Extension {
         // Extend the AppMenu's 'open' method to add an 'Edit' MenuItem
         // See: https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/main/js/ui/appMenu.js
         this._injectionManager.overrideMethod(AppMenu.prototype, 'open',
-            originalMethod => { // @fixme: Не корректно, переработать
+            originalMethod => {
                 const metadata = this.metadata;
                 const settings = this.getSettings();
                 const modifiedMenus = this._modifiedMenus;
@@ -494,28 +534,17 @@ export default class EditDesktopFilesExtension extends Extension {
                     let editMenuItem = this.addAction(localizedEditStr, () => {
                         // Create editing file manager if not exists
                         if (!this._editingFileManager) {
-                            this._editingFileManager = new EditingFileManager(metadata);
+                            this._editingFileManager = new EditingFileManager(this);
                         }
 
-                        // Create intermediate file for editing
                         const fileInfo = this._editingFileManager.createForEditing(appInfo.filename);
                         if (!fileInfo) {
-                            return;  // Error notification is already shown by manager
+                            return;
                         }
 
-                        // Open editor with intermediate file
-                        let editCommand = `gapplication launch org.gnome.TextEditor '${fileInfo.tempPath}'`;
-                        if (settings.get_boolean("use-custom-edit-command")) {
-                            let customEditCommand = settings.get_string("custom-edit-command");
-                            // If the user forgot to include %U in the command, fallback to the default with a warning
-                            if (customEditCommand.indexOf('%U') != -1) {
-                                editCommand = customEditCommand.replace('%U', `'${fileInfo.tempPath}'`);
-                            } else {
-                                console.warn(`${metadata.name}: Custom edit command is missing '%U', falling back to default GNOME Text Editor`);
-                            }
-                        }
-
-                        GLib.spawn_command_line_async(editCommand);
+                        // Using async/await with Gio.Subprocess instead of direct GLib.spawn_command_line_async
+                        // for proper process handling and completion tracking
+                        this._launchEditor(fileInfo);
 
                         if (Main.overview.visible) {
                             Main.overview.hide();
