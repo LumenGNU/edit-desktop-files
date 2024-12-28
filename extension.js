@@ -22,6 +22,7 @@ import { Extension, InjectionManager, gettext as _ } from 'resource:///org/gnome
 import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
+// @fixme: переименовать временный -> промежуточный
 /*
  * Manages intermediate files for safe desktop entry editing.
  * Handles file lifecycle: creation, validation, application of changes.
@@ -62,7 +63,7 @@ class EditingFileManager {
         // Вставляем имя файла второй строкой
         const lines = this._formatAsEdfComments(text).split('\n');
         lines.splice(1, 0, `#EDF# @File: ${file_name}`);
-        
+
         return lines.join('\n');
     }
 
@@ -320,9 +321,9 @@ class EditingFileManager {
             );
 
             // Write help text first
-            const helpText = this._formatHelpComments(this._getHelpText(), 
-                                                      this._originalFiles.get(file).get_basename());
-            
+            const helpText = this._formatHelpComments(this._getHelpText(),
+                this._originalFiles.get(file).get_basename());
+
             file.replace_contents(
                 new TextEncoder().encode(helpText),
                 null,
@@ -491,21 +492,26 @@ export default class EditDesktopFilesExtension extends Extension {
 
                     // Add the 'Edit' MenuItem
                     let editMenuItem = this.addAction(localizedEditStr, () => {
-                        // prepare temp-file
-                        const fileInfo = this._createTempFileForEditing(appInfo.filename);
-                        if (!fileInfo) {
-                            return; // Do nothing if temp file creation failed
+                        // Create editing file manager if not exists
+                        if (!this._editingFileManager) {
+                            this._editingFileManager = new EditingFileManager(metadata);
                         }
-                        // Open the GNOME Text Editor by default, otherwise use the command provided by the user
-                        let editCommand = `gapplication launch org.gnome.TextEditor '${fileInfo.tempPath}'`;
 
+                        // Create intermediate file for editing
+                        const fileInfo = this._editingFileManager.createForEditing(appInfo.filename);
+                        if (!fileInfo) {
+                            return;  // Error notification is already shown by manager
+                        }
+
+                        // Open editor with intermediate file
+                        let editCommand = `gapplication launch org.gnome.TextEditor '${fileInfo.tempPath}'`;
                         if (settings.get_boolean("use-custom-edit-command")) {
-                            let customEditCommand = settings.get_string("custom-edit-command")
+                            let customEditCommand = settings.get_string("custom-edit-command");
                             // If the user forgot to include %U in the command, fallback to the default with a warning
                             if (customEditCommand.indexOf('%U') != -1) {
-                                editCommand = customEditCommand.replace('%U', `'${appInfo.filename}'`)
+                                editCommand = customEditCommand.replace('%U', `'${fileInfo.tempPath}'`);
                             } else {
-                                console.warn(`${metadata.name}: Custom edit command is missing '%U', falling back to default GNOME Text Editor`)
+                                console.warn(`${metadata.name}: Custom edit command is missing '%U', falling back to default GNOME Text Editor`);
                             }
                         }
 
@@ -514,7 +520,7 @@ export default class EditDesktopFilesExtension extends Extension {
                         if (Main.overview.visible) {
                             Main.overview.hide();
                         }
-                    })
+                    });
 
                     // Move the 'Edit' MenuItem to be after the 'App Details' MenuItem
                     let menuItems = this._getMenuItems()
