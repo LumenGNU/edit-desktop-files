@@ -572,9 +572,30 @@ export default class EditDesktopFilesExtension extends Extension {
                 );
 
                 if (confirmed) {
-                    // TODO: Move file to trash
+                    // Get path to local desktop entry
+                    const localPath = GLib.build_filenamev([
+                        GLib.get_home_dir(),
+                        '.local/share/applications',
+                        fileInfo.originalFile.get_basename()
+                    ]);
+                    const localFile = Gio.File.new_for_path(localPath);
+
+                    try {
+                        // Move to trash if exists
+                        if (localFile.query_exists(null)) {
+                            localFile.trash(null);
+                        }
+
+                        // Cleanup editing file
+                        this._editingFileManager.remove(fileInfo.tempFile);
+
+                    } catch (error) {
+                        logError(error, 'Failed to move file to trash');
+                    }
+                } else {
+                    // User canceled - just remove editing file
+                    this._editingFileManager.remove(fileInfo.tempFile);
                 }
-                // @todo: else ...
                 return;
             }
 
