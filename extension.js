@@ -18,13 +18,12 @@
  */
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import * as St from 'gi://St';
+import Clutter from 'gi://Clutter';
 import { Extension, InjectionManager, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
-import * as St from 'gi://St';
-import Clutter from 'gi://Clutter';
 
 // @fixme: переименовать временный -> промежуточный
 /*
@@ -515,6 +514,59 @@ export default class EditDesktopFilesExtension extends Extension {
     }
 
     /*
+     * Applies validated changes to local applications directory
+     * Copies edited file to ~/.local/share/applications
+     * 
+     * @param {Gio.File} editedFile - Validated editing file
+     * @returns {boolean} True if changes were applied successfully
+     */
+    applyChanges(editedFile) {
+        try {
+            const originalFile = this._originalFiles.get(editedFile);
+            if (!originalFile) {
+                logError(new Error('No original file found for edited file'));
+                return false;
+            }
+
+            // Get content without EDF comments
+            const [success, contents] = editedFile.load_contents(null);
+            // if (!success) {
+            //     return false;
+            // }
+            const content = this._filterEdfComments(new TextDecoder().decode(contents));
+
+            // Prepare path in local applications directory
+            const localPath = GLib.build_filenamev([
+                GLib.get_user_data_dir(),
+                'applications',
+                originalFile.get_basename()
+            ]);
+            const localFile = Gio.File.new_for_path(localPath);
+
+            // Create parent directory if it doesn't exist
+            const parent = localFile.get_parent();
+            if (!parent.query_exists(null)) {
+                parent.make_directory_with_parents(null);
+            }
+
+            // Write the filtered content
+            localFile.replace_contents(
+                new TextEncoder().encode(content),
+                null,
+                false,
+                Gio.FileCreateFlags.REPLACE_DESTINATION,
+                null
+            );
+
+            return true;
+
+        } catch (error) {
+            logError(error, 'Failed to apply changes');
+            return false;
+        }
+    }
+
+    /*
      * Launches editor for desktop entry and waits for completion
      * Uses Gio.Subprocess instead of GLib.spawn_command_line_async because:
      * - It's safer and cleaner way to handle subprocesses
@@ -562,8 +614,8 @@ export default class EditDesktopFilesExtension extends Extension {
                     if (confirmed) {
                         // Get path to local desktop entry
                         const localPath = GLib.build_filenamev([
-                            GLib.get_home_dir(),
-                            '.local/share/applications',
+                            GLib.get_user_data_dir(),
+                            'applications',
                             fileInfo.originalFile.get_basename()
                         ]);
                         const localFile = Gio.File.new_for_path(localPath);
@@ -604,11 +656,19 @@ export default class EditDesktopFilesExtension extends Extension {
                     this._editingFileManager.remove(fileInfo.tempFile);
                     return;
                 }
+
                 // Loop continues - reopen editor
 
             }
 
-             // TODO: If file is valid - apply changes
+            // File is valid - apply changes
+            if (!this._editingFileManager.applyChanges(fileInfo.tempFile)) {
+                Main.notify(_('Edit Desktop Files'),
+                    _('Failed to save changes'));
+            }
+
+            // Cleanup temporary file
+            this._editingFileManager.remove(fileInfo.tempFile);
 
         } catch (error) {
             logError(error, 'Failed to handle editor process');
