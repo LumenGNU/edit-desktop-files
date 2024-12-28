@@ -25,11 +25,11 @@ import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
-// @fixme: переименовать временный -> промежуточный
+
 /*
  * Manages intermediate files for safe desktop entry editing.
  * Handles file lifecycle: creation, validation, application of changes.
- */
+ */ // @todo: рефакторинг. Переместит класс в модуль
 class EditingFileManager {
     // FIXME: Add more robust file operations with better error handling
     // FIXME: Ensure all file streams are properly closed
@@ -40,7 +40,7 @@ class EditingFileManager {
     constructor() {
         this._extension = extension;  // Need access to extension.path
         this._editingFiles = new Set();
-        this._originalFiles = new Map();  // temp file -> original file
+        this._originalFiles = new Map();  // intermediate file -> original file
     }
 
     /*
@@ -142,19 +142,19 @@ class EditingFileManager {
      */
     createForEditing(originalPath) {
         const originalFile = Gio.File.new_for_path(originalPath);
-        const tempPath = GLib.build_filenamev([GLib.get_tmp_dir(),
+        const intermediatePath = GLib.build_filenamev([GLib.get_tmp_dir(),
         `edf-${GLib.uuid_string_random()}.desktop`]);
-        const tempFile = Gio.File.new_for_path(tempPath);
+        const intermediateFile = Gio.File.new_for_path(intermediatePath);
 
-        this._editingFiles.add(tempFile);
-        this._originalFiles.set(tempFile, originalFile);
+        this._editingFiles.add(intermediateFile);
+        this._originalFiles.set(intermediateFile, originalFile);
 
         try {
             // Write help text first
             const helpText = this._getHelpText();
             if (helpText) {
                 const formattedHelp = this._formatHelpComments(helpText, originalFile.get_basename());
-                tempFile.replace_contents(
+                intermediateFile.replace_contents(
                     new TextEncoder().encode(formattedHelp),
                     null,
                     false,
@@ -165,7 +165,7 @@ class EditingFileManager {
                 // Append original content
                 const [success, contents] = originalFile.load_contents(null);
                 if (success) {
-                    const stream = tempFile.append_to(
+                    const stream = intermediateFile.append_to(
                         Gio.FileCreateFlags.NONE,
                         null
                     );
@@ -175,17 +175,17 @@ class EditingFileManager {
                 // @todo: else { fail }
             }
 
-            this._editingFiles.add(tempFile);
+            this._editingFiles.add(intermediateFile);
 
             return {
-                tempPath,
-                tempFile,
+                intermediatePath: intermediatePath,
+                intermediateFile: intermediateFile,
                 originalFile
             };
         } catch (error) {
-            logError(error, 'Failed to create temporary file');
+            logError(error, 'Failed to create intermediate file');
             Main.notify(_('Edit Desktop Files'),
-                _('Cannot create temporary file for editing'));
+                _('Cannot create intermediate file for editing'));
             return null;
         }
     }
@@ -579,13 +579,13 @@ export default class EditDesktopFilesExtension extends Extension {
     async _launchEditor(fileInfo) {
         try {
             while (true) {
-                const command = ['gapplication', 'launch', 'org.gnome.TextEditor', fileInfo.tempPath];
+                const command = ['gapplication', 'launch', 'org.gnome.TextEditor', fileInfo.intermediatePath];
 
                 // Use custom command if configured
                 if (this._settings.get_boolean("use-custom-edit-command")) {
                     const customCommand = this._settings.get_string("custom-edit-command");
                     if (customCommand.indexOf('%U') !== -1) {
-                        command = customCommand.replace('%U', fileInfo.tempPath).split(' ');
+                        command = customCommand.replace('%U', fileInfo.intermediatePath).split(' ');
                     } else {
                         console.warn(`${this.metadata.name}: Custom edit command is missing '%U', falling back to default GNOME Text Editor`);
                     }
@@ -603,7 +603,7 @@ export default class EditDesktopFilesExtension extends Extension {
 
                 // First check if file is empty
                 // Check if file is empty (contains only comments)
-                if (this._editingFileManager.isEmptyContent(fileInfo.tempFile)) {
+                if (this._editingFileManager.isEmptyContent(fileInfo.intermediateFile)) {
                     const confirmed = await this._showConfirmDialog(
                         _("Remove Desktop Entry"),
                         _("This entry appears to be empty. Do you want to remove it?"),
@@ -627,20 +627,20 @@ export default class EditDesktopFilesExtension extends Extension {
                             }
 
                             // Cleanup editing file
-                            this._editingFileManager.remove(fileInfo.tempFile);
+                            this._editingFileManager.remove(fileInfo.intermediateFile);
 
                         } catch (error) {
                             logError(error, 'Failed to move file to trash');
                         }
                     } else {
                         // User canceled - just remove editing file
-                        this._editingFileManager.remove(fileInfo.tempFile);
+                        this._editingFileManager.remove(fileInfo.intermediateFile);
                     }
                     return;
                 }
 
                 // Editor closed - validate edited file
-                if (this._editingFileManager.validateFile(fileInfo.tempFile)) {
+                if (this._editingFileManager.validateFile(fileInfo.intermediateFile)) {
                     break;  // File is valid, exit loop
                 }
 
@@ -653,7 +653,7 @@ export default class EditDesktopFilesExtension extends Extension {
                 );
 
                 if (!continueEditing) {
-                    this._editingFileManager.remove(fileInfo.tempFile);
+                    this._editingFileManager.remove(fileInfo.intermediateFile);
                     return;
                 }
 
@@ -662,13 +662,13 @@ export default class EditDesktopFilesExtension extends Extension {
             }
 
             // File is valid - apply changes
-            if (!this._editingFileManager.applyChanges(fileInfo.tempFile)) {
+            if (!this._editingFileManager.applyChanges(fileInfo.intermediateFile)) {
                 Main.notify(_('Edit Desktop Files'),
                     _('Failed to save changes'));
             }
 
-            // Cleanup temporary file
-            this._editingFileManager.remove(fileInfo.tempFile);
+            // Cleanup intermediate file
+            this._editingFileManager.remove(fileInfo.intermediateFile);
 
         } catch (error) {
             logError(error, 'Failed to handle editor process');
