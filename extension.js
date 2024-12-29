@@ -682,7 +682,7 @@ export default class EditDesktopFilesExtension extends Extension {
         this._addedMenuItems = []
 
         // Call gettext here explicitly so "Edit" can be localized as part of this extension
-        let localizedEditStr = gettext('Edit')
+        let localizedEditStr = _('Edit')
 
         // Extend the AppMenu's 'open' method to add an 'Edit' MenuItem
         // See: https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/main/js/ui/appMenu.js
